@@ -1,12 +1,83 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Civic-Connect</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="/src/main.jsx"></script>
-</body>
-</html>
+// --- Realtime notifications (Socket.IO simple client) ---
+let socket;
+function connectSocket() {
+  // replace with actual server url
+  socket = io('/'); 
+  socket.on('connect', () => console.log('socket connected'));
+  socket.on('notification', (n) => {
+    // show toast or update UI
+    alert('Notification: ' + (n.message || 'update'));
+    // optional: refresh report list or map
+  });
+}
+
+// --- Map (Leaflet) ---
+let map;
+function initMap() {
+  map = L.map('map').setView([0,0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+}
+
+async function loadReportsOnMap(filters={}) {
+  // call /api/reports?bbox=... or server-side cluster endpoint
+  const resp = await fetch('/api/reports?per_page=500');
+  const data = await resp.json();
+  const geojson = {
+    type: 'FeatureCollection',
+    features: data.items.map(r => ({
+      type:'Feature',
+      geometry: { type:'Point', coordinates: [r.gps_lng, r.gps_lat] },
+      properties: { id: r.id, category: r.category, status: r.status }
+    }))
+  };
+  L.geoJSON(geojson, {
+    onEachFeature: (f, layer) => {
+      layer.bindPopup(`<strong>${f.properties.category}</strong><br>${f.properties.status}<br><button onclick="viewReport('${f.properties.id}')">View</button>`);
+    }
+  }).addTo(map);
+}
+
+// --- Filters UI ---
+document.getElementById('applyFilters').addEventListener('click', () => {
+  const q = document.getElementById('filterQ').value;
+  const category = document.getElementById('filterCategory').value;
+  // build query and reload map/list
+  loadReportsOnMap({ q, category });
+});
+
+// --- Comments ---
+const commentsList = document.getElementById('commentsList');
+document.getElementById('commentForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = document.getElementById('commentBody').value;
+  const reportId = window.currentReportId;
+  await fetch(`/api/reports/${reportId}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify({ body })
+  });
+  // optimistic refresh
+  loadComments(reportId);
+});
+
+async function loadComments(reportId) {
+  const resp = await fetch(`/api/reports/${reportId}/comments`);
+  const json = await resp.json();
+  commentsList.innerHTML = json.items.map(c => `<div class="comment"><strong>${c.user_name||'anon'}</strong><div>${c.body}</div></div>`).join('');
+  document.getElementById('commentsCard').hidden = false;
+}
+
+// --- Chatbot ---
+document.getElementById('toggleChat').addEventListener('click', () => {
+  const win = document.getElementById('chatWindow');
+  win.hidden = !win.hidden;
+});
+document.getElementById('sendChat').addEventListener('click', async () => {
+  const text = document.getElementById('chatInput').value;
+  const resp = await fetch('/api/ai/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ message: text, userId: null }) });
+  const json = await resp.json();
+  const h = document.getElementById('chatHistory');
+  h.innerHTML += `<div class="user">You: ${text}</div><div class="bot">Bot: ${json.reply}</div>`;
+});
